@@ -1,0 +1,22 @@
+# Dataset (exceeds GitHub file limit and raw competition data)
+dataset/
+
+# Large output predictions (exceeds GitHub 100MB file limit)
+output/
+*.tsv
+
+# Submission zip archive (204MB, exceeds GitHub 100MB limit)
+*.zip
+
+# Python caches and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# OS and IDE files
+.DS_Store
+.vscode/
+.idea/
