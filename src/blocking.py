@@ -74,6 +74,7 @@ def iter_exact_name_candidates_for_targets(
     source1_factory: Callable[[], Iterable[EntityRecord]],
     source2_records: Iterable[EntityRecord],
     source3_records: Iterable[EntityRecord],
+    on_target_index_ready: Callable[[EntitySource, int], None] | None = None,
 ) -> Iterator[CandidatePair]:
     """Generate baseline candidates while holding only one target index at once.
 
@@ -82,4 +83,6 @@ def iter_exact_name_candidates_for_targets(
     """
     for target_source, target_records in (("S2", source2_records), ("S3", source3_records)):
         index = build_exact_name_index(target_records)
+        if on_target_index_ready is not None:
+            on_target_index_ready(target_source, len(index))
         yield from iter_exact_name_candidates(source1_factory(), index, target_source)

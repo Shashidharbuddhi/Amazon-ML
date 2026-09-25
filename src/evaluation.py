@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import statistics
+import sys
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
@@ -48,6 +49,7 @@ def evaluate_candidates(
     source1_entities: int,
     source2_entities: int,
     source3_entities: int,
+    progress_every: int | None = None,
 ) -> CandidateEvaluation:
     """Evaluate a unique candidate stream against training labels.
 
@@ -73,6 +75,8 @@ def evaluate_candidates(
     candidate_pairs = 0
     for pair in candidates:
         candidate_pairs += 1
+        if progress_every and candidate_pairs % progress_every == 0:
+            print(f"candidate_pairs_processed={candidate_pairs:,}", file=sys.stderr, flush=True)
         candidates_by_s1[pair.source1_entity_id] += 1
         targets = remaining.get(pair.source1_entity_id)
         if targets is not None and pair.candidate_entity_id in targets:
@@ -114,17 +118,26 @@ def _count(records: Iterable[object]) -> int:
     return sum(1 for _ in records)
 
 
-def evaluate_exact_name_train(data_root: Path) -> CandidateEvaluation:
+def evaluate_exact_name_train(data_root: Path, *, progress: bool = False) -> CandidateEvaluation:
     """Run the baseline blocker and evaluator on the discovered training split."""
     paths = discover_split(data_root, "train")
     assert paths.ground_truth is not None
+    if progress:
+        print("counting entity records", file=sys.stderr, flush=True)
     source1_count = _count(iter_entities(paths.source1, "S1"))
     source2_count = _count(iter_entities(paths.source2, "S2"))
     source3_count = _count(iter_entities(paths.source3, "S3"))
+    if progress:
+        print("loading ground truth and evaluating exact-name candidates", file=sys.stderr, flush=True)
     candidates = iter_exact_name_candidates_for_targets(
         lambda: iter_entities(paths.source1, "S1"),
         iter_entities(paths.source2, "S2"),
         iter_entities(paths.source3, "S3"),
+        on_target_index_ready=(
+            lambda source, keys: print(f"{source} index keys={keys:,}", file=sys.stderr, flush=True)
+        )
+        if progress
+        else None,
     )
     return evaluate_candidates(
         candidates,
@@ -132,6 +145,7 @@ def evaluate_exact_name_train(data_root: Path) -> CandidateEvaluation:
         source1_entities=source1_count,
         source2_entities=source2_count,
         source3_entities=source3_count,
+        progress_every=1_000_000 if progress else None,
     )
 
 
@@ -140,7 +154,7 @@ def main() -> None:
     parser.add_argument("--data-root", type=Path, default=Path("data"))
     parser.add_argument("--output", type=Path, default=Path("output/exact_name_evaluation.json"))
     args = parser.parse_args()
-    report = asdict(evaluate_exact_name_train(args.data_root))
+    report = asdict(evaluate_exact_name_train(args.data_root, progress=True))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2))
