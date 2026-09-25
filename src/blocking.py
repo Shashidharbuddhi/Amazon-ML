@@ -37,16 +37,16 @@ def build_exact_name_index(records: Iterable[EntityRecord]) -> dict[BlockKey, li
     Posting lists preserve input order, ensuring repeatable candidate ordering.
     """
     index: dict[BlockKey, list[str]] = defaultdict(list)
+    seen_entity_ids: set[str] = set()
     for record in records:
         if record.source == "S1":
             raise ValueError("An exact-name target index must contain only S2 or S3 entities")
+        if record.entity_id in seen_entity_ids:
+            continue
+        seen_entity_ids.add(record.entity_id)
         key = exact_country_name_key(record)
         if key is not None:
-            posting_list = index[key]
-            # Source IDs are expected to be unique, but retain this defensive
-            # guard so malformed input cannot create duplicate candidate pairs.
-            if record.entity_id not in posting_list:
-                posting_list.append(record.entity_id)
+            index[key].append(record.entity_id)
     return dict(index)
 
 
