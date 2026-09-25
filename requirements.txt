@@ -1,0 +1,2 @@
+# Runtime uses the Python standard library. Install this for the test suite.
+pytest>=8,<9
