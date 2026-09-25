@@ -1,0 +1,9 @@
+__pycache__/
+.pytest_cache/
+*.py[cod]
+.venv/
+output/*.tsv
+output/*.json
+
+# Supplied challenge data is intentionally not versioned.
+data/
