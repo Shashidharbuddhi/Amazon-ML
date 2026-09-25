@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Hashable, Iterable, Iterator
 from dataclasses import dataclass
 
 from src.data_loader import EntityRecord, EntitySource
 from src.preprocessing import normalize_country, normalize_name
+from src.preprocessing import normalize_address, name_tokens
 
 BlockKey = tuple[str, str]
+KeyFunction = Callable[[EntityRecord], Hashable | None]
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -31,12 +33,32 @@ def exact_country_name_key(record: EntityRecord) -> BlockKey | None:
     return country, name
 
 
-def build_exact_name_index(records: Iterable[EntityRecord]) -> dict[BlockKey, list[str]]:
+def exact_country_address_key(record: EntityRecord) -> BlockKey | None:
+    """Return a country/address key, excluding blank normalized addresses."""
+    country = normalize_country(record.country)
+    address = normalize_address(record.business_address)
+    if not country or not address:
+        return None
+    return country, address
+
+
+def country_name_signature_key(record: EntityRecord) -> tuple[str, tuple[str, ...]] | None:
+    """Return an order-insensitive full-name signature for token reordering."""
+    country = normalize_country(record.country)
+    tokens = name_tokens(record.business_name)
+    if not country or not tokens:
+        return None
+    return country, tuple(sorted(set(tokens)))
+
+
+def build_inverted_index(
+    records: Iterable[EntityRecord], key_function: KeyFunction = exact_country_name_key
+) -> dict[Hashable, list[str]]:
     """Build an inverted index without retaining full source records.
 
     Posting lists preserve input order, ensuring repeatable candidate ordering.
     """
-    index: dict[BlockKey, list[str]] = defaultdict(list)
+    index: dict[Hashable, list[str]] = defaultdict(list)
     seen_entity_ids: set[str] = set()
     for record in records:
         if record.source == "S1":
@@ -44,10 +66,15 @@ def build_exact_name_index(records: Iterable[EntityRecord]) -> dict[BlockKey, li
         if record.entity_id in seen_entity_ids:
             continue
         seen_entity_ids.add(record.entity_id)
-        key = exact_country_name_key(record)
+        key = key_function(record)
         if key is not None:
             index[key].append(record.entity_id)
     return dict(index)
+
+
+def build_exact_name_index(records: Iterable[EntityRecord]) -> dict[BlockKey, list[str]]:
+    """Compatibility wrapper for the baseline country/name index."""
+    return build_inverted_index(records, exact_country_name_key)  # type: ignore[return-value]
 
 
 def iter_exact_name_candidates(
@@ -70,6 +97,28 @@ def iter_exact_name_candidates(
             yield CandidatePair(record.entity_id, candidate_id, target_source)
 
 
+def iter_keyed_candidates(
+    source1_records: Iterable[EntityRecord],
+    target_index: dict[Hashable, list[str]],
+    target_source: EntitySource,
+    key_function: KeyFunction,
+    rule: str,
+) -> Iterator[CandidatePair]:
+    """Yield candidates for a supplied deterministic blocking-key function."""
+    if target_source == "S1":
+        raise ValueError("Candidate target source must be S2 or S3")
+    for record in source1_records:
+        if record.source != "S1":
+            raise ValueError("Candidate left side must contain only S1 entities")
+        key = key_function(record)
+        if key is None:
+            continue
+        for candidate_id in target_index.get(key, ()):
+            if not candidate_id.startswith(f"{target_source}-"):
+                raise ValueError("Target index contains an entity from a different source")
+            yield CandidatePair(record.entity_id, candidate_id, target_source, rule)
+
+
 def iter_exact_name_candidates_for_targets(
     source1_factory: Callable[[], Iterable[EntityRecord]],
     source2_records: Iterable[EntityRecord],
@@ -86,3 +135,88 @@ def iter_exact_name_candidates_for_targets(
         if on_target_index_ready is not None:
             on_target_index_ready(target_source, len(index))
         yield from iter_exact_name_candidates(source1_factory(), index, target_source)
+
+
+def iter_keyed_candidates_for_targets(
+    source1_factory: Callable[[], Iterable[EntityRecord]],
+    source2_records: Iterable[EntityRecord],
+    source3_records: Iterable[EntityRecord],
+    key_function: KeyFunction,
+    rule: str,
+    on_target_index_ready: Callable[[EntitySource, int], None] | None = None,
+) -> Iterator[CandidatePair]:
+    """Generate a single blocking rule while indexing S2 and S3 separately."""
+    for target_source, target_records in (("S2", source2_records), ("S3", source3_records)):
+        index = build_inverted_index(target_records, key_function)
+        if on_target_index_ready is not None:
+            on_target_index_ready(target_source, len(index))
+        yield from iter_keyed_candidates(source1_factory(), index, target_source, key_function, rule)
+
+
+def iter_multipass_candidates_for_targets(
+    source1_factory: Callable[[], Iterable[EntityRecord]],
+    source2_records: Iterable[EntityRecord],
+    source3_records: Iterable[EntityRecord],
+    passes: tuple[tuple[str, KeyFunction], ...],
+    *,
+    max_posting_list_size: int,
+    on_target_index_ready: Callable[[EntitySource, str, int, int], None] | None = None,
+) -> Iterator[CandidatePair]:
+    """Yield the deduplicated union of guarded blocking passes.
+
+    A pass is disabled for a target key when its posting list exceeds
+    ``max_posting_list_size``. This bounds the candidates contributed by each
+    pass while retaining the useful small and distinctive blocks.
+    """
+    if max_posting_list_size < 1:
+        raise ValueError("max_posting_list_size must be positive")
+    if not passes:
+        return
+
+    for target_source, target_records in (("S2", source2_records), ("S3", source3_records)):
+        raw_indexes: list[dict[Hashable, list[str]]] = [defaultdict(list) for _ in passes]
+        blocked_keys: list[set[Hashable]] = [set() for _ in passes]
+        seen_entity_ids: set[str] = set()
+        for record in target_records:
+            if record.source == "S1":
+                raise ValueError("A target index must contain only S2 or S3 entities")
+            if record.entity_id in seen_entity_ids:
+                continue
+            seen_entity_ids.add(record.entity_id)
+            for pass_number, (index, (_, key_function)) in enumerate(zip(raw_indexes, passes)):
+                key = key_function(record)
+                if key is None or key in blocked_keys[pass_number]:
+                    continue
+                posting_list = index[key]
+                if len(posting_list) >= max_posting_list_size:
+                    del index[key]
+                    blocked_keys[pass_number].add(key)
+                    continue
+                posting_list.append(record.entity_id)
+
+        indexes: list[tuple[str, KeyFunction, dict[Hashable, list[str]]]] = []
+        for pass_number, ((rule, key_function), raw_index) in enumerate(zip(passes, raw_indexes)):
+            indexes.append((rule, key_function, raw_index))
+            if on_target_index_ready is not None:
+                on_target_index_ready(
+                    target_source,
+                    rule,
+                    len(raw_index),
+                    len(raw_index) + len(blocked_keys[pass_number]),
+                )
+
+        for record in source1_factory():
+            if record.source != "S1":
+                raise ValueError("Candidate left side must contain only S1 entities")
+            emitted: set[str] = set()
+            for rule, key_function, index in indexes:
+                key = key_function(record)
+                if key is None:
+                    continue
+                for candidate_id in index.get(key, ()):
+                    if candidate_id in emitted:
+                        continue
+                    if not candidate_id.startswith(f"{target_source}-"):
+                        raise ValueError("Target index contains an entity from a different source")
+                    emitted.add(candidate_id)
+                    yield CandidatePair(record.entity_id, candidate_id, target_source, rule)

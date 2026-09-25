@@ -1,6 +1,7 @@
 from src.blocking import CandidatePair
 from src.data_loader import GroundTruthRecord
 from src.evaluation import evaluate_candidates
+from src.evaluation import CONSERVATIVE_MULTIPASS, RULES
 
 
 def test_evaluation_counts_multiple_matches_and_no_match_entities():
@@ -24,3 +25,11 @@ def test_evaluation_counts_multiple_matches_and_no_match_entities():
     assert result.source1_with_true_matches_lost == 2
     assert result.median_candidates_per_source1 == 1
     assert result.reduction_ratio == 0.75
+
+
+def test_available_rules_include_the_conservative_multipass_rules():
+    assert {"exact_country_name", "exact_country_address", "country_name_signature"} <= set(RULES)
+    assert [rule for rule, _ in CONSERVATIVE_MULTIPASS] == [
+        "exact_country_address",
+        "country_name_signature",
+    ]
