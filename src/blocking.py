@@ -220,3 +220,67 @@ def iter_multipass_candidates_for_targets(
                         raise ValueError("Target index contains an entity from a different source")
                     emitted.add(candidate_id)
                     yield CandidatePair(record.entity_id, candidate_id, target_source, rule)
+
+
+def iter_multipass_candidate_records_for_target(
+    source1_records: Iterable[EntityRecord],
+    target_records: Iterable[EntityRecord],
+    target_source: EntitySource,
+    passes: tuple[tuple[str, KeyFunction], ...],
+    *,
+    max_posting_list_size: int,
+) -> Iterator[tuple[CandidatePair, EntityRecord, EntityRecord]]:
+    """Yield Person 1 candidates with their target record for one target source.
+
+    This is the record-aware counterpart of
+    :func:`iter_multipass_candidates_for_targets`.  It uses exactly the same
+    keys, posting-list guard, ordering, and per-S1 de-duplication, but retains
+    a single target source's raw records so a downstream matcher can score
+    candidates without materializing both S2 and S3 in memory.
+    """
+    if target_source == "S1":
+        raise ValueError("Candidate target source must be S2 or S3")
+    if max_posting_list_size < 1:
+        raise ValueError("max_posting_list_size must be positive")
+
+    raw_indexes: list[dict[Hashable, list[str]]] = [defaultdict(list) for _ in passes]
+    blocked_keys: list[set[Hashable]] = [set() for _ in passes]
+    records_by_id: dict[str, EntityRecord] = {}
+
+    for record in target_records:
+        if record.source != target_source:
+            raise ValueError("Target records do not match target_source")
+        if record.entity_id in records_by_id:
+            continue
+        records_by_id[record.entity_id] = record
+        for pass_number, (index, (_, key_function)) in enumerate(zip(raw_indexes, passes)):
+            key = key_function(record)
+            if key is None or key in blocked_keys[pass_number]:
+                continue
+            posting_list = index[key]
+            if len(posting_list) >= max_posting_list_size:
+                del index[key]
+                blocked_keys[pass_number].add(key)
+                continue
+            posting_list.append(record.entity_id)
+
+    for source1_record in source1_records:
+        if source1_record.source != "S1":
+            raise ValueError("Candidate left side must contain only S1 entities")
+        emitted: set[str] = set()
+        for rule, key_function, index in (
+            (rule, key_function, index)
+            for (rule, key_function), index in zip(passes, raw_indexes)
+        ):
+            key = key_function(source1_record)
+            if key is None:
+                continue
+            for candidate_id in index.get(key, ()):
+                if candidate_id in emitted:
+                    continue
+                emitted.add(candidate_id)
+                yield (
+                    CandidatePair(source1_record.entity_id, candidate_id, target_source, rule),
+                    source1_record,
+                    records_by_id[candidate_id],
+                )

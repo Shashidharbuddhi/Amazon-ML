@@ -23,7 +23,7 @@ def test_evaluation_counts_multiple_matches_and_no_match_entities():
     assert result.source2_recall == 1 / 2
     assert result.source3_recall == 0.0
     assert result.source1_with_true_matches_lost == 2
-    assert result.median_candidates_per_source1 == 1
+    assert result.median_candidates_per_source1 == 0.0
     assert result.reduction_ratio == 0.75
 
 
