@@ -6,10 +6,11 @@ from collections import defaultdict
 from collections.abc import Callable, Hashable, Iterable, Iterator
 from dataclasses import dataclass
 
+import re
 from src.data_loader import EntityRecord, EntitySource
 from src.preprocessing import normalize_country, normalize_name
-from src.preprocessing import normalize_address, name_tokens
-from src.normalization import normalize_name as feature_normalize_name
+from src.preprocessing import normalize_address, name_tokens, address_tokens
+from src.normalization import normalize_name as feature_normalize_name, extract_numeric_tokens
 
 BlockKey = tuple[str, str]
 KeyFunction = Callable[[EntityRecord], Hashable | None]
@@ -59,6 +60,65 @@ def feature_normalized_name_key(record: EntityRecord) -> BlockKey | None:
     if not country or not name:
         return None
     return country, name
+
+
+_DOMAIN_REGEX = re.compile(
+    r"\b(www\.)?([a-z0-9\-]+)\.(com|org|net|in|co|us|biz|info|io|gov|edu|co\.in)\b",
+    re.IGNORECASE,
+)
+_WHITESPACE_COLLAPSE = re.compile(r"\s+")
+
+
+def compact_name_key(record: EntityRecord) -> BlockKey | None:
+    """Full name with web domain extensions and whitespace stripped."""
+    country = normalize_country(record.country)
+    if not country or not record.business_name:
+        return None
+    name = _DOMAIN_REGEX.sub(r"\2", record.business_name.lower())
+    name = re.sub(r"\.(?=\s|[a-zA-Z]|$)", "", name)
+    norm = feature_normalize_name(name)
+    compact = _WHITESPACE_COLLAPSE.sub("", norm)
+    if not compact or len(compact) < 3:
+        return None
+    return country, compact
+
+
+def country_address_signature_key(record: EntityRecord) -> tuple[str, tuple[str, ...]] | None:
+    """Order-insensitive complete address token signature."""
+    country = normalize_country(record.country)
+    tokens = address_tokens(record.business_address)
+    if not country or not tokens:
+        return None
+    return country, tuple(sorted(set(tokens)))
+
+
+def country_longest_token_addr_num_key(record: EntityRecord) -> tuple[str, str, str] | None:
+    """Country + longest distinctive business name token (>=4 chars) + address number."""
+    country = normalize_country(record.country)
+    if not country or not record.business_name or not record.business_address:
+        return None
+    tokens = [t for t in name_tokens(record.business_name) if len(t) >= 4]
+    if not tokens:
+        tokens = [t for t in name_tokens(record.business_name) if len(t) >= 3]
+    if not tokens:
+        return None
+    longest = sorted(tokens, key=lambda t: (-len(t), t))[0]
+    nums = extract_numeric_tokens(record.business_address)
+    if not nums:
+        return None
+    primary_num = sorted(nums, key=lambda x: (-len(x), x))[0]
+    return country, longest, primary_num
+
+
+def country_first_2_name_tokens_key(record: EntityRecord) -> tuple[str, str, str] | None:
+    """Country + first 2 non-trivial name tokens (minimum 2 chars each)."""
+    country = normalize_country(record.country)
+    if not country or not record.business_name:
+        return None
+    tokens = [t for t in name_tokens(record.business_name) if len(t) >= 2]
+    if len(tokens) < 2:
+        return None
+    return country, tokens[0], tokens[1]
 
 
 def build_inverted_index(

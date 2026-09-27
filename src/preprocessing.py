@@ -35,14 +35,16 @@ LEGAL_SUFFIX_TOKENS = frozenset(
 _WHITESPACE = re.compile(r"\s+")
 
 
+# Precomputed translation table for Unicode categories L (letter), M (mark), N (number), and whitespace
+_PUNCT_TABLE = {
+    code: (chr(code) if chr(code).isspace() or unicodedata.category(chr(code))[0] in {"L", "M", "N"} else " ")
+    for code in range(0x10000)
+}
+
+
 def _replace_punctuation(value: str) -> str:
     """Use Unicode categories so combining marks in Indic scripts survive."""
-    return "".join(
-        character
-        if character.isspace() or unicodedata.category(character)[0] in {"L", "M", "N"}
-        else " "
-        for character in value
-    )
+    return value.translate(_PUNCT_TABLE)
 
 
 def normalize_text(value: str | None) -> str:

@@ -145,3 +145,26 @@ def test_multipass_union_includes_feature_normalized_name_and_deduplicates():
         )
     )
     assert [(pair.candidate_entity_id, pair.candidate_source) for pair in pairs] == [("S2-1", "S2")]
+
+
+def test_compact_name_key_handles_domains_and_spacing():
+    from src.blocking import compact_name_key
+    s1 = entity("S1-1", "Corner Pilates", "116 Redwood Dr", "US")
+    s3 = entity("S3-1", "cornerpilates.com", "116 Redwood Dr", "US")
+    assert compact_name_key(s1) == ("us", "cornerpilates")
+    assert compact_name_key(s1) == compact_name_key(s3)
+
+
+def test_country_address_signature_key_handles_reordering():
+    from src.blocking import country_address_signature_key
+    s1 = entity("S1-1", "Biz", "Katy, TX, 21342 Bending Green Way", "US")
+    s2 = entity("S2-1", "Biz", "21342 Bending Green Way, Katy, TX", "US")
+    assert country_address_signature_key(s1) == country_address_signature_key(s2)
+
+
+def test_country_longest_token_addr_num_key():
+    from src.blocking import country_longest_token_addr_num_key
+    s1 = entity("S1-1", "QH Vendome L.L.C.", "21342 Bending Green Way", "US")
+    s2 = entity("S2-1", "Vendome Center", "Unit 10, 21342 Bending Green Way", "US")
+    assert country_longest_token_addr_num_key(s1) == ("us", "vendome", "21342")
+    assert country_longest_token_addr_num_key(s1) == country_longest_token_addr_num_key(s2)

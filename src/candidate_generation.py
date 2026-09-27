@@ -16,6 +16,10 @@ from src.blocking import (
     country_name_signature_key,
     exact_country_address_key,
     feature_normalized_name_key,
+    compact_name_key,
+    country_address_signature_key,
+    country_longest_token_addr_num_key,
+    country_first_2_name_tokens_key,
     iter_multipass_candidates_for_targets,
 )
 from src.data_loader import EntityRecord, iter_entities, discover_split
@@ -29,6 +33,10 @@ class CandidateGenerationConfig:
         ("exact_country_address", exact_country_address_key),
         ("country_name_signature", country_name_signature_key),
         ("feature_normalized_name", feature_normalized_name_key),
+        ("compact_name", compact_name_key),
+        ("country_address_signature", country_address_signature_key),
+        ("country_longest_token_addr_num", country_longest_token_addr_num_key),
+        ("country_first_2_name_tokens", country_first_2_name_tokens_key),
     )
     max_posting_list_size: int = 100
 

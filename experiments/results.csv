@@ -1,3 +1,4 @@
 experiment,features,model,train_rows,validation_rows,precision,recall,f0_5,threshold,notes
 tree_model_lightgbm,26_engineered_features,LightGBM,429197,106654,0.9379,0.9095,0.9241,0.60,LightGBM with non-linear interaction features and threshold sweep
 baseline_logistic,26_engineered_features,LogisticRegression,429197,106654,0.9122,0.9077,0.9011,0.50,Standardized pairwise features with threshold sweep
+tree_model_lightgbm,30_engineered_features,LightGBM,709155,175721,0.9317,0.8866,0.9099,0.60,LightGBM with non-linear interaction features and threshold sweep

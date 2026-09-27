@@ -136,7 +136,25 @@ def build_pair_features(
             feats["address_numeric_overlap"] = 0.0
             feats["address_numeric_mismatch"] = 0.0
 
-    # --- Interaction Features ---
+    # --- Interaction & Containment Features ---
+    if not name1_empty and not name2_empty:
+        feats["name_token_containment"] = len(tokens1 & tokens2) / max(1, min(len(tokens1), len(tokens2)))
+    else:
+        feats["name_token_containment"] = 0.0
+
+    if not addr1_empty and not addr2_empty:
+        feats["address_token_containment"] = len(addr_tokens1 & addr_tokens2) / max(1, min(len(addr_tokens1), len(addr_tokens2)))
+        nums1 = extract_numeric_tokens(norm_a1)
+        nums2 = extract_numeric_tokens(norm_a2)
+        feats["address_has_exact_number_match"] = 1.0 if (nums1 and nums2 and bool(nums1 & nums2)) else 0.0
+        zips1 = {n for n in nums1 if len(n) in (5, 6)}
+        zips2 = {n for n in nums2 if len(n) in (5, 6)}
+        feats["zipcode_match"] = 1.0 if (zips1 and zips2 and bool(zips1 & zips2)) else (-1.0 if (zips1 and zips2) else 0.0)
+    else:
+        feats["address_token_containment"] = 0.0
+        feats["address_has_exact_number_match"] = 0.0
+        feats["zipcode_match"] = 0.0
+
     feats["name_addr_avg"] = (feats["name_ratio"] + feats["address_ratio"]) / 2.0
     feats["name_high_addr_high"] = feats["name_ratio"] * feats["address_ratio"]
     feats["strong_name_and_addr"] = 1.0 if (feats["name_ratio"] >= 0.85 and feats["address_ratio"] >= 0.70) else 0.0

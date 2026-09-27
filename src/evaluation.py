@@ -133,11 +133,9 @@ RULES: dict[str, KeyFunction] = {
     "country_name_signature": country_name_signature_key,
 }
 
-CONSERVATIVE_MULTIPASS: tuple[tuple[str, KeyFunction], ...] = (
-    ("exact_country_address", exact_country_address_key),
-    ("country_name_signature", country_name_signature_key),
-    ("feature_normalized_name", feature_normalized_name_key),
-)
+from src.candidate_generation import CandidateGenerationConfig
+
+CONSERVATIVE_MULTIPASS: tuple[tuple[str, KeyFunction], ...] = CandidateGenerationConfig().passes
 
 
 def evaluate_rule_train(data_root: Path, rule: str, *, progress: bool = False) -> CandidateEvaluation:
