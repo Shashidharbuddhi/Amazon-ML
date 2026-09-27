@@ -15,6 +15,7 @@ from src.blocking import (
     KeyFunction,
     country_name_signature_key,
     exact_country_address_key,
+    feature_normalized_name_key,
     iter_multipass_candidates_for_targets,
 )
 from src.data_loader import EntityRecord, iter_entities, discover_split
@@ -27,6 +28,7 @@ class CandidateGenerationConfig:
     passes: tuple[tuple[str, KeyFunction], ...] = (
         ("exact_country_address", exact_country_address_key),
         ("country_name_signature", country_name_signature_key),
+        ("feature_normalized_name", feature_normalized_name_key),
     )
     max_posting_list_size: int = 100
 

@@ -32,4 +32,5 @@ def test_available_rules_include_the_conservative_multipass_rules():
     assert [rule for rule, _ in CONSERVATIVE_MULTIPASS] == [
         "exact_country_address",
         "country_name_signature",
+        "feature_normalized_name",
     ]

@@ -16,6 +16,7 @@ from src.blocking import (
     KeyFunction,
     country_name_signature_key,
     exact_country_address_key,
+    feature_normalized_name_key,
     exact_country_name_key,
     iter_multipass_candidates_for_targets,
     iter_keyed_candidates_for_targets,
@@ -135,6 +136,7 @@ RULES: dict[str, KeyFunction] = {
 CONSERVATIVE_MULTIPASS: tuple[tuple[str, KeyFunction], ...] = (
     ("exact_country_address", exact_country_address_key),
     ("country_name_signature", country_name_signature_key),
+    ("feature_normalized_name", feature_normalized_name_key),
 )
 
 

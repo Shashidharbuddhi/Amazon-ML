@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from src.data_loader import EntityRecord, EntitySource
 from src.preprocessing import normalize_country, normalize_name
 from src.preprocessing import normalize_address, name_tokens
+from src.normalization import normalize_name as feature_normalize_name
 
 BlockKey = tuple[str, str]
 KeyFunction = Callable[[EntityRecord], Hashable | None]
@@ -49,6 +50,15 @@ def country_name_signature_key(record: EntityRecord) -> tuple[str, tuple[str, ..
     if not country or not tokens:
         return None
     return country, tuple(sorted(set(tokens)))
+
+
+def feature_normalized_name_key(record: EntityRecord) -> BlockKey | None:
+    """Return the feature-module country/name key used by the matcher."""
+    country = normalize_country(record.country)
+    name = feature_normalize_name(record.business_name)
+    if not country or not name:
+        return None
+    return country, name
 
 
 def build_inverted_index(

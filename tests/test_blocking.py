@@ -4,6 +4,7 @@ from src.blocking import (
     country_name_signature_key,
     exact_country_address_key,
     exact_country_name_key,
+    feature_normalized_name_key,
     iter_exact_name_candidates,
     iter_keyed_candidates,
     iter_keyed_candidates_for_targets,
@@ -26,6 +27,15 @@ def test_address_and_name_signature_keys_are_conservative():
     assert exact_country_address_key(entity("S1-1", "x", "No. 10 / 448A", "France")) == ("france", "no 10 448a")
     assert exact_country_address_key(entity("S1-2", "x", "", "France")) is None
     assert country_name_signature_key(entity("S1-3", "Bar & Café", "x", "France")) == ("france", ("and", "bar", "café"))
+
+
+def test_feature_normalized_name_key_uses_feature_normalization_and_country():
+    assert feature_normalized_name_key(
+        entity("S2-1", "ABC Pvt. Ltd.", "x", " France ")
+    ) == ("france", "abc")
+    assert feature_normalized_name_key(entity("S2-2", "ABC", "x", "Germany")) != (
+        "france", "abc"
+    )
 
 
 def test_signature_blocking_matches_reordered_names():
@@ -116,3 +126,22 @@ def test_multipass_skips_oversized_posting_lists():
         )
     )
     assert pairs == []
+
+
+def test_multipass_union_includes_feature_normalized_name_and_deduplicates():
+    source1 = [entity("S1-1", "ABC Private Limited", "other", "US")]
+    source2 = [entity("S2-1", "ABC Pvt. Ltd.", "other", "US")]
+    pairs = list(
+        iter_multipass_candidates_for_targets(
+            lambda: iter(source1),
+            source2,
+            [],
+            (
+                ("address", exact_country_address_key),
+                ("signature", country_name_signature_key),
+                ("feature_name", feature_normalized_name_key),
+            ),
+            max_posting_list_size=100,
+        )
+    )
+    assert [(pair.candidate_entity_id, pair.candidate_source) for pair in pairs] == [("S2-1", "S2")]

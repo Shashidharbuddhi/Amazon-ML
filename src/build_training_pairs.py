@@ -8,7 +8,8 @@ import random
 from collections import defaultdict
 from pathlib import Path
 
-from src.blocking import CandidatePair, country_name_signature_key, exact_country_address_key
+from src.blocking import CandidatePair
+from src.candidate_generation import CandidateGenerationConfig
 from src.config import DATA_DIR
 from src.data_loader import EntityRecord, discover_split, iter_entities, iter_ground_truth
 from src.features import build_pair_features
@@ -21,6 +22,51 @@ def load_ground_truth_dict(path: Path) -> dict[str, set[str]]:
     for rec in iter_ground_truth(path):
         gt[rec.source1_entity_id] = set(rec.matched_entity_ids)
     return gt
+
+
+def iter_sampled_training_candidates(
+    s1_records: dict[str, EntityRecord],
+    target_records,
+    target_source: str,
+    passes,
+    max_posting_list_size: int,
+):
+    """Yield cap-faithful candidates while retaining only sampled-S1 postings."""
+    sampled_s1_by_key: dict[tuple[str, object], list[str]] = defaultdict(list)
+    keys_by_s1: dict[str, list[tuple[str, object]]] = {}
+    for record in s1_records.values():
+        record_keys: list[tuple[str, object]] = []
+        for rule, key_function in passes:
+            key = key_function(record)
+            if key is None:
+                continue
+            keyed = (rule, key)
+            record_keys.append(keyed)
+            sampled_s1_by_key[keyed].append(record.entity_id)
+        keys_by_s1[record.entity_id] = record_keys
+
+    postings: dict[tuple[str, object], list[EntityRecord]] = {}
+    blocked: set[tuple[str, object]] = set()
+    for record in target_records:
+        for rule, key_function in passes:
+            key = key_function(record)
+            keyed = (rule, key)
+            if key is None or keyed not in sampled_s1_by_key or keyed in blocked:
+                continue
+            posting = postings.setdefault(keyed, [])
+            if len(posting) >= max_posting_list_size:
+                postings.pop(keyed, None)
+                blocked.add(keyed)
+                continue
+            posting.append(record)
+
+    for s1_id, keys in keys_by_s1.items():
+        candidates: dict[str, EntityRecord] = {}
+        for keyed in keys:
+            for target in postings.get(keyed, ()):
+                candidates.setdefault(target.entity_id, target)
+        for target in candidates.values():
+            yield CandidatePair(s1_id, target.entity_id, target_source), s1_records[s1_id], target
 
 
 def build_training_dataset(
@@ -51,46 +97,19 @@ def build_training_dataset(
 
     print(f"Selected {len(selected_s1_ids):,} S1 entities ({n_pos_s1} with matches, {n_zero_s1} singletons).")
 
-    print("Indexing sampled S1 entity records and blocking keys...")
+    print("Indexing sampled S1 entity records...")
     s1_dict: dict[str, EntityRecord] = {}
-    key_to_s1: dict[tuple[str, object], list[str]] = defaultdict(list)
 
     for r in iter_entities(paths.source1, "S1"):
         if r.entity_id in selected_s1_ids:
             s1_dict[r.entity_id] = r
-            k_addr = exact_country_address_key(r)
-            if k_addr is not None:
-                key_to_s1[("exact_country_address", k_addr)].append(r.entity_id)
-            k_sig = country_name_signature_key(r)
-            if k_sig is not None:
-                key_to_s1[("country_name_signature", k_sig)].append(r.entity_id)
 
-    print(f"Indexed {len(s1_dict):,} S1 entities into {len(key_to_s1):,} blocking keys.")
+    print(f"Indexed {len(s1_dict):,} sampled S1 entities.")
 
-    candidate_pairs_map: dict[tuple[str, str], CandidatePair] = {}
-    cand_dict: dict[str, EntityRecord] = {}
+    blocking_config = CandidateGenerationConfig()
 
-    print("Streaming S2 and S3 target records to match blocking keys...")
-    for target_source, target_path in (("S2", paths.source2), ("S3", paths.source3)):
-        for r in iter_entities(target_path, target_source):
-            matched_s1_ids: set[str] = set()
-
-            k_addr = exact_country_address_key(r)
-            if k_addr is not None and ("exact_country_address", k_addr) in key_to_s1:
-                matched_s1_ids.update(key_to_s1[("exact_country_address", k_addr)])
-
-            k_sig = country_name_signature_key(r)
-            if k_sig is not None and ("country_name_signature", k_sig) in key_to_s1:
-                matched_s1_ids.update(key_to_s1[("country_name_signature", k_sig)])
-
-            if matched_s1_ids:
-                cand_dict[r.entity_id] = r
-                for s1_id in matched_s1_ids:
-                    pair_key = (s1_id, r.entity_id)
-                    if pair_key not in candidate_pairs_map:
-                        candidate_pairs_map[pair_key] = CandidatePair(s1_id, r.entity_id, target_source)
-
-    print(f"Generated {len(candidate_pairs_map):,} unique candidate pairs for sampled S1 entities.")
+    def sampled_s1_factory():
+        return (record for record in s1_dict.values())
 
     if output_csv is None:
         out_dir = root / "processed"
@@ -114,41 +133,46 @@ def build_training_dataset(
         writer = csv.DictWriter(f_out, fieldnames=fieldnames)
         writer.writeheader()
 
-        for (s1_id, cand_id), pair in candidate_pairs_map.items():
-            s1_rec = s1_dict.get(s1_id)
-            cand_rec = cand_dict.get(cand_id)
-
-            if not s1_rec or not cand_rec:
-                continue
-
-            split_group = get_entity_split_group(s1_id)
-            true_matches = all_gt.get(s1_id, set())
-            is_match = 1 if cand_id in true_matches else 0
-
-            feats = build_pair_features(
-                s1_rec.business_name,
-                s1_rec.business_address,
-                s1_rec.country,
-                cand_rec.business_name,
-                cand_rec.business_address,
-                cand_rec.country,
+        for target_source, target_path in (("S2", paths.source2), ("S3", paths.source3)):
+            candidate_records = iter_sampled_training_candidates(
+                s1_dict,
+                iter_entities(target_path, target_source),
+                target_source,
+                blocking_config.passes,
+                max_posting_list_size=blocking_config.max_posting_list_size,
             )
+            for pair, s1_rec, cand_rec in candidate_records:
+                s1_id = pair.source1_entity_id
+                cand_id = pair.candidate_entity_id
 
-            row = {
-                "source1_id": s1_id,
-                "candidate_id": cand_id,
-                "candidate_source": pair.candidate_source,
-                "split_group": split_group,
-                "label": is_match,
-            }
-            row.update(feats)
-            writer.writerow(row)
+                split_group = get_entity_split_group(s1_id)
+                true_matches = all_gt.get(s1_id, set())
+                is_match = 1 if cand_id in true_matches else 0
 
-            total_pairs += 1
-            if is_match:
-                total_pos += 1
-            else:
-                total_neg += 1
+                feats = build_pair_features(
+                    s1_rec.business_name,
+                    s1_rec.business_address,
+                    s1_rec.country,
+                    cand_rec.business_name,
+                    cand_rec.business_address,
+                    cand_rec.country,
+                )
+
+                row = {
+                    "source1_id": s1_id,
+                    "candidate_id": cand_id,
+                    "candidate_source": pair.candidate_source,
+                    "split_group": split_group,
+                    "label": is_match,
+                }
+                row.update(feats)
+                writer.writerow(row)
+
+                total_pairs += 1
+                if is_match:
+                    total_pos += 1
+                else:
+                    total_neg += 1
 
     print(f"\nFinished building training pairs!")
     print(
